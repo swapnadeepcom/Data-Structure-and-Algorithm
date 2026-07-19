@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-
-  # Allows you to run the workflow manually from the Actions tab
   workflow_dispatch:
 
 permissions:
@@ -13,7 +11,6 @@ permissions:
 
 jobs:
   organize:
-    # Prevent an infinite loop when this workflow commits its own changes
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
@@ -23,25 +20,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Organize problems and create README files
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install markdownify beautifulsoup4
+
+      - name: Organize problems and generate clean README
         shell: bash
         run: |
           python3 <<'PYTHON_SCRIPT'
-          import html
           import json
           import re
           import shutil
           import urllib.request
           from pathlib import Path
 
+          from bs4 import BeautifulSoup
+          from markdownify import markdownify as html_to_markdown
 
-          # ---------------------------------------------------------
-          # Configuration
-          # ---------------------------------------------------------
 
-          repository = Path(".")
+          ROOT = Path(".")
 
-          topic_folders = {
+
+          TOPIC_MAPPING = {
               "array": "Array",
               "string": "String",
               "hash table": "Hash-Table",
@@ -52,8 +53,8 @@ jobs:
               "binary tree": "Tree",
               "binary search tree": "Tree",
               "graph": "Graph",
-              "breadth-first search": "Graph",
               "depth-first search": "Graph",
+              "breadth-first search": "Graph",
               "heap (priority queue)": "Heap",
               "heap": "Heap",
               "binary search": "Binary-Search",
@@ -63,28 +64,22 @@ jobs:
               "backtracking": "Backtracking",
               "greedy": "Greedy",
               "matrix": "Matrix",
-              "trie": "Trie",
-              "union find": "Disjoint-Set",
-              "monotonic stack": "Stack",
               "prefix sum": "Prefix-Sum",
               "sorting": "Sorting",
               "bit manipulation": "Bit-Manipulation",
-              "recursion": "Recursion",
+              "trie": "Trie",
+              "union find": "Disjoint-Set",
               "divide and conquer": "Divide-and-Conquer",
+              "recursion": "Recursion",
               "math": "Math",
               "simulation": "Simulation",
-              "database": "Database",
-              "concurrency": "Concurrency",
               "design": "Design",
           }
 
-          all_topic_directories = sorted(set(topic_folders.values()))
-          all_topic_directories.append("Other")
 
-
-          # Broad DSA topics have higher priority.
-          # Therefore Running Sum goes into Array instead of Prefix-Sum.
-          topic_priority = [
+          # Broad DSA categories are preferred.
+          # Running Sum therefore goes into Array rather than Prefix-Sum.
+          TOPIC_PRIORITY = [
               "Linked-List",
               "Tree",
               "Graph",
@@ -106,34 +101,23 @@ jobs:
               "Prefix-Sum",
               "Sorting",
               "Bit-Manipulation",
-              "Recursion",
               "Divide-and-Conquer",
+              "Recursion",
               "Math",
               "Simulation",
               "Design",
-              "Database",
-              "Concurrency",
           ]
 
 
-          # ---------------------------------------------------------
-          # Helper functions
-          # ---------------------------------------------------------
+          TOPIC_DIRECTORIES = set(TOPIC_MAPPING.values())
+          TOPIC_DIRECTORIES.add("Other")
+
 
           def is_problem_folder(path: Path) -> bool:
-              return (
-                  path.is_dir()
-                  and re.match(r"^\d+-", path.name) is not None
-              )
+              return path.is_dir() and bool(re.match(r"^\d+-", path.name))
 
 
-          def obtain_slug(folder_name: str) -> str:
-              """
-              Convert:
-              1480-running-sum-of-1d-array
-              into:
-              running-sum-of-1d-array
-              """
+          def problem_slug(folder_name: str) -> str:
               return re.sub(r"^\d+-", "", folder_name)
 
 
@@ -141,7 +125,6 @@ jobs:
               query = """
               query questionData($titleSlug: String!) {
                 question(titleSlug: $titleSlug) {
-                  questionId
                   questionFrontendId
                   title
                   titleSlug
@@ -155,7 +138,7 @@ jobs:
               }
               """
 
-              body = {
+              payload = {
                   "query": query,
                   "variables": {
                       "titleSlug": slug
@@ -164,54 +147,138 @@ jobs:
 
               request = urllib.request.Request(
                   "https://leetcode.com/graphql",
-                  data=json.dumps(body).encode("utf-8"),
+                  data=json.dumps(payload).encode("utf-8"),
                   headers={
                       "Content-Type": "application/json",
                       "Referer": f"https://leetcode.com/problems/{slug}/",
-                      "User-Agent": "Mozilla/5.0 GitHub-Actions-LeetCode-Organizer",
+                      "User-Agent": "Mozilla/5.0",
                   },
                   method="POST",
               )
 
               try:
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      response_data = json.loads(
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=30
+                  ) as response:
+                      result = json.loads(
                           response.read().decode("utf-8")
                       )
 
-                  return response_data.get("data", {}).get("question")
+                  return result.get("data", {}).get("question")
 
               except Exception as error:
-                  print(f"Could not retrieve metadata for {slug}: {error}")
+                  print(
+                      f"Could not download metadata for {slug}: "
+                      f"{error}"
+                  )
                   return None
 
 
-          def choose_topic(problem) -> str:
+          def select_topic(problem) -> str:
               if not problem:
                   return "Other"
 
-              detected_folders = []
+              detected = []
 
               for tag in problem.get("topicTags", []):
                   tag_name = tag.get("name", "").strip().lower()
+                  mapped = TOPIC_MAPPING.get(tag_name)
 
-                  mapped_folder = topic_folders.get(tag_name)
+                  if mapped:
+                      detected.append(mapped)
 
-                  if mapped_folder:
-                      detected_folders.append(mapped_folder)
-
-              for preferred_folder in topic_priority:
-                  if preferred_folder in detected_folders:
-                      return preferred_folder
+              for preferred in TOPIC_PRIORITY:
+                  if preferred in detected:
+                      return preferred
 
               return "Other"
 
 
-          def extract_existing_approach(readme_path: Path):
-              """
-              Preserve the approach already written by the user.
-              """
+          def clean_problem_html(raw_html: str) -> str:
+              if not raw_html:
+                  return "Problem description is currently unavailable."
 
+              soup = BeautifulSoup(raw_html, "html.parser")
+
+              # Remove unnecessary attributes that can disturb Markdown.
+              for element in soup.find_all(True):
+                  element.attrs = {}
+
+              cleaned_html = str(soup)
+
+              markdown = html_to_markdown(
+                  cleaned_html,
+                  heading_style="ATX",
+                  bullets="-",
+                  strip=["script", "style"],
+              )
+
+              # Remove excessive blank lines.
+              markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+
+              # Remove trailing spaces from every line.
+              markdown = "\n".join(
+                  line.rstrip()
+                  for line in markdown.splitlines()
+              )
+
+              return markdown.strip()
+
+
+          def find_solution_file(folder: Path):
+              allowed_extensions = {
+                  ".py",
+                  ".java",
+                  ".cpp",
+                  ".c",
+                  ".cs",
+                  ".js",
+                  ".ts",
+                  ".go",
+                  ".rs",
+                  ".kt",
+                  ".swift",
+                  ".rb",
+                  ".php",
+                  ".scala",
+              }
+
+              for file in folder.iterdir():
+                  if (
+                      file.is_file()
+                      and file.suffix.lower() in allowed_extensions
+                  ):
+                      return file
+
+              return None
+
+
+          def language_from_extension(extension: str) -> str:
+              languages = {
+                  ".py": "python",
+                  ".java": "java",
+                  ".cpp": "cpp",
+                  ".c": "c",
+                  ".cs": "csharp",
+                  ".js": "javascript",
+                  ".ts": "typescript",
+                  ".go": "go",
+                  ".rs": "rust",
+                  ".kt": "kotlin",
+                  ".swift": "swift",
+                  ".rb": "ruby",
+                  ".php": "php",
+                  ".scala": "scala",
+              }
+
+              return languages.get(extension.lower(), "")
+
+
+          def extract_existing_section(
+              readme_path: Path,
+              heading: str
+          ):
               if not readme_path.exists():
                   return None
 
@@ -221,8 +288,9 @@ jobs:
               )
 
               pattern = re.compile(
-                  r"## My Approach\s*(.*?)(?=\n## |\Z)",
-                  flags=re.IGNORECASE | re.DOTALL,
+                  rf"##\s+{re.escape(heading)}\s*\n"
+                  rf"(.*?)(?=\n##\s+|\Z)",
+                  re.IGNORECASE | re.DOTALL,
               )
 
               match = pattern.search(content)
@@ -230,155 +298,100 @@ jobs:
               if not match:
                   return None
 
-              approach = match.group(1).strip()
+              section = match.group(1).strip()
 
-              if not approach:
-                  return None
-
-              default_messages = [
-                  "write the approach you used",
-                  "describe your approach",
+              bad_values = [
+                  "write the approach",
+                  "write the first step",
+                  "o(?)",
                   "complete this section",
               ]
 
-              if any(message in approach.lower() for message in default_messages):
+              if not section:
                   return None
 
-              return approach
+              if any(value in section.lower() for value in bad_values):
+                  return None
+
+              return section
 
 
-          def create_readme(
-              destination: Path,
-              folder_name: str,
-              slug: str,
-              problem,
-              existing_approach=None,
-          ):
-              readme_path = destination / "README.md"
-
-              problem_number = folder_name.split("-", 1)[0]
-
-              if problem:
-                  title = problem.get("title") or slug.replace("-", " ").title()
-                  frontend_id = (
-                      problem.get("questionFrontendId")
-                      or problem_number
-                  )
-                  difficulty = problem.get("difficulty", "Unknown")
-                  description = problem.get(
-                      "content",
-                      "<p>Problem description could not be loaded.</p>",
-                  )
-
-                  tags = [
-                      tag.get("name", "")
-                      for tag in problem.get("topicTags", [])
-                      if tag.get("name")
-                  ]
-              else:
-                  title = slug.replace("-", " ").title()
-                  frontend_id = problem_number
-                  difficulty = "Unknown"
-                  description = (
-                      "<p>Problem description could not be downloaded "
-                      "automatically.</p>"
-                  )
-                  tags = []
-
-              tag_text = ", ".join(tags) if tags else "Not available"
-
-              if existing_approach:
-                  approach_section = existing_approach
-              else:
-                  approach_section = """<!--
-              Replace the text below with the approach you used.
-
-              Example:
-              I traverse the array from left to right. Starting from index 1,
-              I add the previous running sum to the current value. Therefore,
-              each position stores the sum of all elements up to that index.
-              -->
-
-              Write the approach you used to solve this problem."""
-
-              readme_content = f"""# {frontend_id}. {title}
-
-              **Difficulty:** {difficulty}
-
-              **Topics:** {tag_text}
-
-              **LeetCode problem:**  
-              `https://leetcode.com/problems/{slug}/`
-
-              ---
-
-              ## Problem Description
-
-              {description}
-
-              ---
-
-              ## My Approach
-
-              {approach_section}
-
-              ---
-
-              ## Algorithm Steps
-
-              1. Write the first step of your algorithm.
-              2. Write the next processing step.
-              3. Explain how the final answer is returned.
-
-              ---
-
-              ## Complexity Analysis
-
-              - **Time Complexity:** `O(?)`
-              - **Space Complexity:** `O(?)`
-
-              ---
-
-              ## Solution
-
-              The accepted solution file is available in this directory.
+          def default_analysis(problem_title: str, solution_file: Path):
+              """
+              Adds a useful analysis only for patterns that can be
+              recognized safely. Other problems receive a clear note
+              instead of incorrect complexity information.
               """
 
-              # Remove YAML/Python indentation from the generated Markdown.
-              lines = readme_content.splitlines()
+              title = problem_title.lower()
 
-              cleaned_lines = []
+              code = ""
 
-              for line in lines:
-                  if line.startswith("              "):
-                      line = line[14:]
+              if solution_file and solution_file.exists():
+                  code = solution_file.read_text(
+                      encoding="utf-8",
+                      errors="ignore"
+                  )
 
-                  cleaned_lines.append(line.rstrip())
+              if "running sum of 1d array" in title:
+                  approach = (
+                      "Use the **prefix-sum technique**.\n\n"
+                      "Start from index `1`. Add the previous running "
+                      "sum to the current element. After each update, "
+                      "`nums[i]` contains the sum of all elements from "
+                      "index `0` through index `i`.\n\n"
+                      "The input array is updated directly, so an "
+                      "additional result array is not required."
+                  )
 
-              readme_path.write_text(
-                  "\n".join(cleaned_lines).strip() + "\n",
-                  encoding="utf-8",
+                  steps = (
+                      "1. Start iterating from index `1`.\n"
+                      "2. Add `nums[i - 1]` to `nums[i]`.\n"
+                      "3. Repeat until the final element.\n"
+                      "4. Return the updated array."
+                  )
+
+                  complexity = (
+                      "- **Time Complexity:** `O(n)` because every "
+                      "array element is processed once.\n"
+                      "- **Space Complexity:** `O(1)` because the "
+                      "input array is updated in place."
+                  )
+
+                  return approach, steps, complexity
+
+              # A safe fallback. Do not invent complexity.
+              approach = (
+                  "The accepted solution is available below. Add a "
+                  "short explanation of the technique used in the code."
               )
 
+              steps = (
+                  "Review the accepted solution and describe its main "
+                  "processing steps."
+              )
 
-          def merge_problem_folder(source: Path, destination: Path):
-              """
-              Move the LeetHub files into the categorized folder.
+              complexity = (
+                  "- **Time Complexity:** Add after analysing the loops "
+                  "and operations used by the solution.\n"
+                  "- **Space Complexity:** Add after checking the extra "
+                  "data structures used by the solution."
+              )
 
-              Existing custom README content is preserved separately.
-              Solution files from the newest submission overwrite old ones.
-              """
+              return approach, steps, complexity
 
+
+          def merge_folder(source: Path, destination: Path):
               destination.mkdir(parents=True, exist_ok=True)
 
               for item in source.iterdir():
                   target = destination / item.name
 
-                  # Do not overwrite a completed custom README.
+                  # The workflow will generate a new clean README.
                   if item.name.lower() in {
                       "readme.md",
                       "readme_en.md",
-                  } and target.exists():
+                  }:
                       continue
 
                   if item.is_dir():
@@ -386,95 +399,251 @@ jobs:
                           shutil.rmtree(target)
 
                       shutil.copytree(item, target)
+
                   else:
                       shutil.copy2(item, target)
 
-              shutil.rmtree(source)
-
-
-          # ---------------------------------------------------------
-          # Find current and incorrectly categorized problems
-          # ---------------------------------------------------------
-
-          candidates = []
-
-          # New LeetHub folders uploaded to repository root
-          for path in repository.iterdir():
-              if is_problem_folder(path):
-                  candidates.append(path)
-
-          # Reprocess folders previously placed in Other
-          other_directory = repository / "Other"
-
-          if other_directory.exists():
-              for path in other_directory.iterdir():
-                  if is_problem_folder(path):
-                      candidates.append(path)
-
-
-          if not candidates:
-              print("No new or incorrectly categorized problems found.")
-
-
-          # ---------------------------------------------------------
-          # Process every detected problem
-          # ---------------------------------------------------------
-
-          for source in candidates:
-              folder_name = source.name
-              slug = obtain_slug(folder_name)
-
-              print(f"\nProcessing: {folder_name}")
-              print(f"LeetCode slug: {slug}")
-
-              problem = fetch_problem(slug)
-              topic = choose_topic(problem)
-
-              print(f"Selected DSA topic: {topic}")
-
-              destination = repository / topic / folder_name
-
-              existing_approach = None
-
-              if destination.exists():
-                  existing_approach = extract_existing_approach(
-                      destination / "README.md"
-                  )
-
-              # Also check an existing README in the source directory.
-              if not existing_approach:
-                  existing_approach = extract_existing_approach(
-                      source / "README.md"
-                  )
-
-              # If source and destination are different, move/merge files.
               if source.resolve() != destination.resolve():
-                  merge_problem_folder(source, destination)
-              else:
-                  destination.mkdir(parents=True, exist_ok=True)
+                  shutil.rmtree(source)
 
-              create_readme(
-                  destination=destination,
-                  folder_name=folder_name,
-                  slug=slug,
-                  problem=problem,
-                  existing_approach=existing_approach,
+
+          def create_readme(
+              destination: Path,
+              folder_name: str,
+              slug: str,
+              problem
+          ):
+              number = folder_name.split("-", 1)[0]
+
+              if problem:
+                  title = problem.get("title") or (
+                      slug.replace("-", " ").title()
+                  )
+
+                  frontend_id = (
+                      problem.get("questionFrontendId")
+                      or number
+                  )
+
+                  difficulty = problem.get(
+                      "difficulty",
+                      "Unknown"
+                  )
+
+                  tags = [
+                      tag.get("name")
+                      for tag in problem.get("topicTags", [])
+                      if tag.get("name")
+                  ]
+
+                  description = clean_problem_html(
+                      problem.get("content", "")
+                  )
+
+              else:
+                  title = slug.replace("-", " ").title()
+                  frontend_id = number
+                  difficulty = "Unknown"
+                  tags = []
+                  description = (
+                      "Problem description could not be downloaded."
+                  )
+
+              solution_file = find_solution_file(destination)
+
+              old_readme = destination / "README.md"
+
+              existing_approach = extract_existing_section(
+                  old_readme,
+                  "Approach"
               )
 
-              print(f"Completed: {destination}")
+              existing_steps = extract_existing_section(
+                  old_readme,
+                  "Algorithm"
+              )
+
+              existing_complexity = extract_existing_section(
+                  old_readme,
+                  "Complexity Analysis"
+              )
+
+              generated_approach, generated_steps, generated_complexity = (
+                  default_analysis(title, solution_file)
+              )
+
+              approach = (
+                  existing_approach
+                  or generated_approach
+              )
+
+              steps = (
+                  existing_steps
+                  or generated_steps
+              )
+
+              complexity = (
+                  existing_complexity
+                  or generated_complexity
+              )
+
+              tag_badges = " ".join(
+                  f"`{tag}`"
+                  for tag in tags
+              ) or "`Not available`"
+
+              solution_section = (
+                  "The accepted solution file was not found."
+              )
+
+              if solution_file:
+                  language = language_from_extension(
+                      solution_file.suffix
+                  )
+
+                  code = solution_file.read_text(
+                      encoding="utf-8",
+                      errors="ignore"
+                  ).strip()
+
+                  solution_section = (
+                      f"### `{solution_file.name}`\n\n"
+                      f"```{language}\n"
+                      f"{code}\n"
+                      f"```"
+                  )
+
+              readme = f"""# {frontend_id}. {title}
+
+          | Difficulty | Topics |
+          |---|---|
+          | **{difficulty}** | {tag_badges} |
+
+          [View problem on LeetCode](https://leetcode.com/problems/{slug}/)
+
+          ---
+
+          ## Problem Description
+
+          {description}
+
+          ---
+
+          ## Approach
+
+          {approach}
+
+          ---
+
+          ## Algorithm
+
+          {steps}
+
+          ---
+
+          ## Complexity Analysis
+
+          {complexity}
+
+          ---
+
+          ## Solution
+
+          {solution_section}
+          """
+
+              # Critical fix: remove all unwanted indentation.
+              lines = readme.splitlines()
+
+              cleaned = []
+
+              for line in lines:
+                  if line.startswith("          "):
+                      line = line[10:]
+
+                  cleaned.append(line.rstrip())
+
+              final_content = "\n".join(cleaned).strip() + "\n"
+
+              old_readme.write_text(
+                  final_content,
+                  encoding="utf-8"
+              )
 
 
-          # Remove Other only when it has become empty.
-          if other_directory.exists():
+          # Find new problems in root.
+          candidates = []
+
+          for item in ROOT.iterdir():
+              if is_problem_folder(item):
+                  candidates.append(item)
+
+
+          # Also rebuild README files already inside topic folders.
+          for topic_directory in TOPIC_DIRECTORIES:
+              topic_path = ROOT / topic_directory
+
+              if not topic_path.exists():
+                  continue
+
+              for item in topic_path.iterdir():
+                  if is_problem_folder(item):
+                      candidates.append(item)
+
+
+          # Remove duplicates while preserving order.
+          unique_candidates = []
+          seen_paths = set()
+
+          for candidate in candidates:
+              resolved = candidate.resolve()
+
+              if resolved not in seen_paths:
+                  unique_candidates.append(candidate)
+                  seen_paths.add(resolved)
+
+
+          for source in unique_candidates:
+              folder_name = source.name
+              slug = problem_slug(folder_name)
+
+              print(f"Processing {folder_name}")
+
+              problem = fetch_problem(slug)
+              topic = select_topic(problem)
+
+              destination = ROOT / topic / folder_name
+
+              if source.resolve() != destination.resolve():
+                  merge_folder(source, destination)
+              else:
+                  destination.mkdir(
+                      parents=True,
+                      exist_ok=True
+                  )
+
+              create_readme(
+                  destination,
+                  folder_name,
+                  slug,
+                  problem
+              )
+
+              print(f"Created clean README: {destination}")
+
+
+          # Remove empty Other folder.
+          other_folder = ROOT / "Other"
+
+          if other_folder.exists():
               try:
-                  other_directory.rmdir()
-                  print("Removed empty Other directory.")
+                  other_folder.rmdir()
               except OSError:
                   pass
 
           PYTHON_SCRIPT
 
-      - name: Commit organized repository
+      - name: Commit changes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -484,8 +653,8 @@ jobs:
           git add --all
 
           if git diff --cached --quiet; then
-            echo "No repository changes were required."
+            echo "No changes required."
           else
-            git commit -m "Organize LeetCode problems by DSA topic"
+            git commit -m "Improve LeetCode README formatting"
             git push
           fi
