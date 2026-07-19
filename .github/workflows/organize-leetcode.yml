@@ -1,0 +1,176 @@
+name: Organize LeetCode Solutions
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  organize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Organize LeetCode problems
+        shell: bash
+        run: |
+          # Topic folders
+          TOPIC_FOLDERS=(
+            "Array"
+            "String"
+            "Hash-Table"
+            "Linked-List"
+            "Stack"
+            "Queue"
+            "Tree"
+            "Graph"
+            "Heap"
+            "Binary-Search"
+            "Two-Pointers"
+            "Sliding-Window"
+            "Dynamic-Programming"
+            "Backtracking"
+            "Greedy"
+            "Math"
+            "Matrix"
+            "Bit-Manipulation"
+            "Prefix-Sum"
+            "Sorting"
+            "Other"
+          )
+
+          # Create topic folders
+          for topic in "${TOPIC_FOLDERS[@]}"; do
+            mkdir -p "$topic"
+          done
+
+          # Check every folder in repository root
+          for dir in */; do
+            folder="${dir%/}"
+
+            # Ignore topic folders
+            skip=false
+
+            for topic in "${TOPIC_FOLDERS[@]}"; do
+              if [ "$folder" = "$topic" ]; then
+                skip=true
+                break
+              fi
+            done
+
+            if [ "$skip" = true ]; then
+              continue
+            fi
+
+            # Only process LeetCode problem folders
+            if ! [[ "$folder" =~ ^[0-9]+- ]]; then
+              continue
+            fi
+
+            echo "Checking problem: $folder"
+
+            readme=""
+
+            if [ -f "$folder/README.md" ]; then
+              readme="$folder/README.md"
+            elif [ -f "$folder/README_EN.md" ]; then
+              readme="$folder/README_EN.md"
+            fi
+
+            topic="Other"
+
+            if [ -n "$readme" ]; then
+              content=$(tr '[:upper:]' '[:lower:]' < "$readme")
+
+              # Main DSA-topic priority
+              if echo "$content" | grep -q "linked list"; then
+                topic="Linked-List"
+
+              elif echo "$content" | grep -q "dynamic programming"; then
+                topic="Dynamic-Programming"
+
+              elif echo "$content" | grep -q "binary search"; then
+                topic="Binary-Search"
+
+              elif echo "$content" | grep -q "sliding window"; then
+                topic="Sliding-Window"
+
+              elif echo "$content" | grep -q "two pointers"; then
+                topic="Two-Pointers"
+
+              elif echo "$content" | grep -q "backtracking"; then
+                topic="Backtracking"
+
+              elif echo "$content" | grep -q "bit manipulation"; then
+                topic="Bit-Manipulation"
+
+              elif echo "$content" | grep -q "prefix sum"; then
+                topic="Prefix-Sum"
+
+              elif echo "$content" | grep -q "hash table"; then
+                topic="Hash-Table"
+
+              elif echo "$content" | grep -q "matrix"; then
+                topic="Matrix"
+
+              elif echo "$content" | grep -q "graph"; then
+                topic="Graph"
+
+              elif echo "$content" | grep -q "tree"; then
+                topic="Tree"
+
+              elif echo "$content" | grep -q "heap"; then
+                topic="Heap"
+
+              elif echo "$content" | grep -q "stack"; then
+                topic="Stack"
+
+              elif echo "$content" | grep -q "queue"; then
+                topic="Queue"
+
+              elif echo "$content" | grep -q "greedy"; then
+                topic="Greedy"
+
+              elif echo "$content" | grep -q "sorting"; then
+                topic="Sorting"
+
+              elif echo "$content" | grep -q "string"; then
+                topic="String"
+
+              elif echo "$content" | grep -q "array"; then
+                topic="Array"
+
+              elif echo "$content" | grep -q "math"; then
+                topic="Math"
+              fi
+            fi
+
+            echo "Moving $folder into $topic/"
+
+            # Remove old copy if LeetHub uploads the same problem again
+            rm -rf "$topic/$folder"
+
+            mv "$folder" "$topic/"
+          done
+
+      - name: Commit organized folders
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "No folders need organization."
+          else
+            git commit -m "Organize LeetCode solutions by DSA topic"
+            git push
+          fi
