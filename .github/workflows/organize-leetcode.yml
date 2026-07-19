@@ -5,11 +5,15 @@ on:
     branches:
       - main
 
+  # Allows you to run the workflow manually from the Actions tab
+  workflow_dispatch:
+
 permissions:
   contents: write
 
 jobs:
   organize:
+    # Prevent an infinite loop when this workflow commits its own changes
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
@@ -19,158 +23,469 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Organize LeetCode problems
+      - name: Organize problems and create README files
         shell: bash
         run: |
-          # Topic folders
-          TOPIC_FOLDERS=(
-            "Array"
-            "String"
-            "Hash-Table"
-            "Linked-List"
-            "Stack"
-            "Queue"
-            "Tree"
-            "Graph"
-            "Heap"
-            "Binary-Search"
-            "Two-Pointers"
-            "Sliding-Window"
-            "Dynamic-Programming"
-            "Backtracking"
-            "Greedy"
-            "Math"
-            "Matrix"
-            "Bit-Manipulation"
-            "Prefix-Sum"
-            "Sorting"
-            "Other"
-          )
+          python3 <<'PYTHON_SCRIPT'
+          import html
+          import json
+          import re
+          import shutil
+          import urllib.request
+          from pathlib import Path
 
-          # Create topic folders
-          for topic in "${TOPIC_FOLDERS[@]}"; do
-            mkdir -p "$topic"
-          done
 
-          # Check every folder in repository root
-          for dir in */; do
-            folder="${dir%/}"
+          # ---------------------------------------------------------
+          # Configuration
+          # ---------------------------------------------------------
 
-            # Ignore topic folders
-            skip=false
+          repository = Path(".")
 
-            for topic in "${TOPIC_FOLDERS[@]}"; do
-              if [ "$folder" = "$topic" ]; then
-                skip=true
-                break
-              fi
-            done
+          topic_folders = {
+              "array": "Array",
+              "string": "String",
+              "hash table": "Hash-Table",
+              "linked list": "Linked-List",
+              "stack": "Stack",
+              "queue": "Queue",
+              "tree": "Tree",
+              "binary tree": "Tree",
+              "binary search tree": "Tree",
+              "graph": "Graph",
+              "breadth-first search": "Graph",
+              "depth-first search": "Graph",
+              "heap (priority queue)": "Heap",
+              "heap": "Heap",
+              "binary search": "Binary-Search",
+              "two pointers": "Two-Pointers",
+              "sliding window": "Sliding-Window",
+              "dynamic programming": "Dynamic-Programming",
+              "backtracking": "Backtracking",
+              "greedy": "Greedy",
+              "matrix": "Matrix",
+              "trie": "Trie",
+              "union find": "Disjoint-Set",
+              "monotonic stack": "Stack",
+              "prefix sum": "Prefix-Sum",
+              "sorting": "Sorting",
+              "bit manipulation": "Bit-Manipulation",
+              "recursion": "Recursion",
+              "divide and conquer": "Divide-and-Conquer",
+              "math": "Math",
+              "simulation": "Simulation",
+              "database": "Database",
+              "concurrency": "Concurrency",
+              "design": "Design",
+          }
 
-            if [ "$skip" = true ]; then
-              continue
-            fi
+          all_topic_directories = sorted(set(topic_folders.values()))
+          all_topic_directories.append("Other")
 
-            # Only process LeetCode problem folders
-            if ! [[ "$folder" =~ ^[0-9]+- ]]; then
-              continue
-            fi
 
-            echo "Checking problem: $folder"
+          # Broad DSA topics have higher priority.
+          # Therefore Running Sum goes into Array instead of Prefix-Sum.
+          topic_priority = [
+              "Linked-List",
+              "Tree",
+              "Graph",
+              "Array",
+              "String",
+              "Stack",
+              "Queue",
+              "Heap",
+              "Trie",
+              "Dynamic-Programming",
+              "Backtracking",
+              "Greedy",
+              "Binary-Search",
+              "Two-Pointers",
+              "Sliding-Window",
+              "Matrix",
+              "Hash-Table",
+              "Disjoint-Set",
+              "Prefix-Sum",
+              "Sorting",
+              "Bit-Manipulation",
+              "Recursion",
+              "Divide-and-Conquer",
+              "Math",
+              "Simulation",
+              "Design",
+              "Database",
+              "Concurrency",
+          ]
 
-            readme=""
 
-            if [ -f "$folder/README.md" ]; then
-              readme="$folder/README.md"
-            elif [ -f "$folder/README_EN.md" ]; then
-              readme="$folder/README_EN.md"
-            fi
+          # ---------------------------------------------------------
+          # Helper functions
+          # ---------------------------------------------------------
 
-            topic="Other"
+          def is_problem_folder(path: Path) -> bool:
+              return (
+                  path.is_dir()
+                  and re.match(r"^\d+-", path.name) is not None
+              )
 
-            if [ -n "$readme" ]; then
-              content=$(tr '[:upper:]' '[:lower:]' < "$readme")
 
-              # Main DSA-topic priority
-              if echo "$content" | grep -q "linked list"; then
-                topic="Linked-List"
+          def obtain_slug(folder_name: str) -> str:
+              """
+              Convert:
+              1480-running-sum-of-1d-array
+              into:
+              running-sum-of-1d-array
+              """
+              return re.sub(r"^\d+-", "", folder_name)
 
-              elif echo "$content" | grep -q "dynamic programming"; then
-                topic="Dynamic-Programming"
 
-              elif echo "$content" | grep -q "binary search"; then
-                topic="Binary-Search"
+          def fetch_problem(slug: str):
+              query = """
+              query questionData($titleSlug: String!) {
+                question(titleSlug: $titleSlug) {
+                  questionId
+                  questionFrontendId
+                  title
+                  titleSlug
+                  content
+                  difficulty
+                  topicTags {
+                    name
+                    slug
+                  }
+                }
+              }
+              """
 
-              elif echo "$content" | grep -q "sliding window"; then
-                topic="Sliding-Window"
+              body = {
+                  "query": query,
+                  "variables": {
+                      "titleSlug": slug
+                  }
+              }
 
-              elif echo "$content" | grep -q "two pointers"; then
-                topic="Two-Pointers"
+              request = urllib.request.Request(
+                  "https://leetcode.com/graphql",
+                  data=json.dumps(body).encode("utf-8"),
+                  headers={
+                      "Content-Type": "application/json",
+                      "Referer": f"https://leetcode.com/problems/{slug}/",
+                      "User-Agent": "Mozilla/5.0 GitHub-Actions-LeetCode-Organizer",
+                  },
+                  method="POST",
+              )
 
-              elif echo "$content" | grep -q "backtracking"; then
-                topic="Backtracking"
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      response_data = json.loads(
+                          response.read().decode("utf-8")
+                      )
 
-              elif echo "$content" | grep -q "bit manipulation"; then
-                topic="Bit-Manipulation"
+                  return response_data.get("data", {}).get("question")
 
-              elif echo "$content" | grep -q "prefix sum"; then
-                topic="Prefix-Sum"
+              except Exception as error:
+                  print(f"Could not retrieve metadata for {slug}: {error}")
+                  return None
 
-              elif echo "$content" | grep -q "hash table"; then
-                topic="Hash-Table"
 
-              elif echo "$content" | grep -q "matrix"; then
-                topic="Matrix"
+          def choose_topic(problem) -> str:
+              if not problem:
+                  return "Other"
 
-              elif echo "$content" | grep -q "graph"; then
-                topic="Graph"
+              detected_folders = []
 
-              elif echo "$content" | grep -q "tree"; then
-                topic="Tree"
+              for tag in problem.get("topicTags", []):
+                  tag_name = tag.get("name", "").strip().lower()
 
-              elif echo "$content" | grep -q "heap"; then
-                topic="Heap"
+                  mapped_folder = topic_folders.get(tag_name)
 
-              elif echo "$content" | grep -q "stack"; then
-                topic="Stack"
+                  if mapped_folder:
+                      detected_folders.append(mapped_folder)
 
-              elif echo "$content" | grep -q "queue"; then
-                topic="Queue"
+              for preferred_folder in topic_priority:
+                  if preferred_folder in detected_folders:
+                      return preferred_folder
 
-              elif echo "$content" | grep -q "greedy"; then
-                topic="Greedy"
+              return "Other"
 
-              elif echo "$content" | grep -q "sorting"; then
-                topic="Sorting"
 
-              elif echo "$content" | grep -q "string"; then
-                topic="String"
+          def extract_existing_approach(readme_path: Path):
+              """
+              Preserve the approach already written by the user.
+              """
 
-              elif echo "$content" | grep -q "array"; then
-                topic="Array"
+              if not readme_path.exists():
+                  return None
 
-              elif echo "$content" | grep -q "math"; then
-                topic="Math"
-              fi
-            fi
+              content = readme_path.read_text(
+                  encoding="utf-8",
+                  errors="ignore"
+              )
 
-            echo "Moving $folder into $topic/"
+              pattern = re.compile(
+                  r"## My Approach\s*(.*?)(?=\n## |\Z)",
+                  flags=re.IGNORECASE | re.DOTALL,
+              )
 
-            # Remove old copy if LeetHub uploads the same problem again
-            rm -rf "$topic/$folder"
+              match = pattern.search(content)
 
-            mv "$folder" "$topic/"
-          done
+              if not match:
+                  return None
 
-      - name: Commit organized folders
+              approach = match.group(1).strip()
+
+              if not approach:
+                  return None
+
+              default_messages = [
+                  "write the approach you used",
+                  "describe your approach",
+                  "complete this section",
+              ]
+
+              if any(message in approach.lower() for message in default_messages):
+                  return None
+
+              return approach
+
+
+          def create_readme(
+              destination: Path,
+              folder_name: str,
+              slug: str,
+              problem,
+              existing_approach=None,
+          ):
+              readme_path = destination / "README.md"
+
+              problem_number = folder_name.split("-", 1)[0]
+
+              if problem:
+                  title = problem.get("title") or slug.replace("-", " ").title()
+                  frontend_id = (
+                      problem.get("questionFrontendId")
+                      or problem_number
+                  )
+                  difficulty = problem.get("difficulty", "Unknown")
+                  description = problem.get(
+                      "content",
+                      "<p>Problem description could not be loaded.</p>",
+                  )
+
+                  tags = [
+                      tag.get("name", "")
+                      for tag in problem.get("topicTags", [])
+                      if tag.get("name")
+                  ]
+              else:
+                  title = slug.replace("-", " ").title()
+                  frontend_id = problem_number
+                  difficulty = "Unknown"
+                  description = (
+                      "<p>Problem description could not be downloaded "
+                      "automatically.</p>"
+                  )
+                  tags = []
+
+              tag_text = ", ".join(tags) if tags else "Not available"
+
+              if existing_approach:
+                  approach_section = existing_approach
+              else:
+                  approach_section = """<!--
+              Replace the text below with the approach you used.
+
+              Example:
+              I traverse the array from left to right. Starting from index 1,
+              I add the previous running sum to the current value. Therefore,
+              each position stores the sum of all elements up to that index.
+              -->
+
+              Write the approach you used to solve this problem."""
+
+              readme_content = f"""# {frontend_id}. {title}
+
+              **Difficulty:** {difficulty}
+
+              **Topics:** {tag_text}
+
+              **LeetCode problem:**  
+              `https://leetcode.com/problems/{slug}/`
+
+              ---
+
+              ## Problem Description
+
+              {description}
+
+              ---
+
+              ## My Approach
+
+              {approach_section}
+
+              ---
+
+              ## Algorithm Steps
+
+              1. Write the first step of your algorithm.
+              2. Write the next processing step.
+              3. Explain how the final answer is returned.
+
+              ---
+
+              ## Complexity Analysis
+
+              - **Time Complexity:** `O(?)`
+              - **Space Complexity:** `O(?)`
+
+              ---
+
+              ## Solution
+
+              The accepted solution file is available in this directory.
+              """
+
+              # Remove YAML/Python indentation from the generated Markdown.
+              lines = readme_content.splitlines()
+
+              cleaned_lines = []
+
+              for line in lines:
+                  if line.startswith("              "):
+                      line = line[14:]
+
+                  cleaned_lines.append(line.rstrip())
+
+              readme_path.write_text(
+                  "\n".join(cleaned_lines).strip() + "\n",
+                  encoding="utf-8",
+              )
+
+
+          def merge_problem_folder(source: Path, destination: Path):
+              """
+              Move the LeetHub files into the categorized folder.
+
+              Existing custom README content is preserved separately.
+              Solution files from the newest submission overwrite old ones.
+              """
+
+              destination.mkdir(parents=True, exist_ok=True)
+
+              for item in source.iterdir():
+                  target = destination / item.name
+
+                  # Do not overwrite a completed custom README.
+                  if item.name.lower() in {
+                      "readme.md",
+                      "readme_en.md",
+                  } and target.exists():
+                      continue
+
+                  if item.is_dir():
+                      if target.exists():
+                          shutil.rmtree(target)
+
+                      shutil.copytree(item, target)
+                  else:
+                      shutil.copy2(item, target)
+
+              shutil.rmtree(source)
+
+
+          # ---------------------------------------------------------
+          # Find current and incorrectly categorized problems
+          # ---------------------------------------------------------
+
+          candidates = []
+
+          # New LeetHub folders uploaded to repository root
+          for path in repository.iterdir():
+              if is_problem_folder(path):
+                  candidates.append(path)
+
+          # Reprocess folders previously placed in Other
+          other_directory = repository / "Other"
+
+          if other_directory.exists():
+              for path in other_directory.iterdir():
+                  if is_problem_folder(path):
+                      candidates.append(path)
+
+
+          if not candidates:
+              print("No new or incorrectly categorized problems found.")
+
+
+          # ---------------------------------------------------------
+          # Process every detected problem
+          # ---------------------------------------------------------
+
+          for source in candidates:
+              folder_name = source.name
+              slug = obtain_slug(folder_name)
+
+              print(f"\nProcessing: {folder_name}")
+              print(f"LeetCode slug: {slug}")
+
+              problem = fetch_problem(slug)
+              topic = choose_topic(problem)
+
+              print(f"Selected DSA topic: {topic}")
+
+              destination = repository / topic / folder_name
+
+              existing_approach = None
+
+              if destination.exists():
+                  existing_approach = extract_existing_approach(
+                      destination / "README.md"
+                  )
+
+              # Also check an existing README in the source directory.
+              if not existing_approach:
+                  existing_approach = extract_existing_approach(
+                      source / "README.md"
+                  )
+
+              # If source and destination are different, move/merge files.
+              if source.resolve() != destination.resolve():
+                  merge_problem_folder(source, destination)
+              else:
+                  destination.mkdir(parents=True, exist_ok=True)
+
+              create_readme(
+                  destination=destination,
+                  folder_name=folder_name,
+                  slug=slug,
+                  problem=problem,
+                  existing_approach=existing_approach,
+              )
+
+              print(f"Completed: {destination}")
+
+
+          # Remove Other only when it has become empty.
+          if other_directory.exists():
+              try:
+                  other_directory.rmdir()
+                  print("Removed empty Other directory.")
+              except OSError:
+                  pass
+
+          PYTHON_SCRIPT
+
+      - name: Commit organized repository
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add --all
 
           if git diff --cached --quiet; then
-            echo "No folders need organization."
+            echo "No repository changes were required."
           else
-            git commit -m "Organize LeetCode solutions by DSA topic"
+            git commit -m "Organize LeetCode problems by DSA topic"
             git push
           fi
