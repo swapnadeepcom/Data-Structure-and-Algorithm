@@ -62,9 +62,17 @@ The accepted solution is available below. Add a short explanation of the techniq
 
 ---
 
+---
+
+---
+
 ## Algorithm
 
 Review the accepted solution and describe its main processing steps.
+
+---
+
+---
 
 ---
 
@@ -75,6 +83,10 @@ Review the accepted solution and describe its main processing steps.
 
 ---
 
+---
+
+---
+
 ## Solution
 
 ### `1051-height-checker.py`
@@ -82,10 +94,14 @@ Review the accepted solution and describe its main processing steps.
 ```python
 class Solution:
     def heightChecker(self, heights: List[int]) -> int:
+        # expected = sorted(heights)
+        # count = 0
+        # for i in range(0,len(heights)):
+        #     if heights[i] != expected[i]:
+        #         count += 1
+        # return count
+
+
         expected = sorted(heights)
-        count = 0
-        for i in range(0,len(heights)):
-  if heights[i] != expected[i]:
-      count += 1
-        return count
+        return sum(h != e for h, e in zip(heights, expected))
 ```
