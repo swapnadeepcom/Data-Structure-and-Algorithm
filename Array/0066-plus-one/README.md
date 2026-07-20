@@ -66,9 +66,17 @@ The accepted solution is available below. Add a short explanation of the techniq
 
 ---
 
+---
+
+---
+
 ## Algorithm
 
 Review the accepted solution and describe its main processing steps.
+
+---
+
+---
 
 ---
 
@@ -84,6 +92,10 @@ Review the accepted solution and describe its main processing steps.
 
 - **Time Complexity:** Add after analysing the loops and operations used by the solution.
 - **Space Complexity:** Add after checking the extra data structures used by the solution.
+
+---
+
+---
 
 ---
 
