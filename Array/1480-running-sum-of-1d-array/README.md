@@ -68,6 +68,8 @@ The input array is updated directly, so an additional result array is not requir
 
 ---
 
+---
+
 ## Algorithm
 
 1. Start iterating from index `1`.
@@ -91,10 +93,14 @@ The input array is updated directly, so an additional result array is not requir
 
 ---
 
+---
+
 ## Complexity Analysis
 
 - **Time Complexity:** `O(n)` because every array element is processed once.
 - **Space Complexity:** `O(1)` because the input array is updated in place.
+
+---
 
 ---
 
