@@ -10,7 +10,9 @@
 
 ## Problem Description
 
-Given an integer array `nums`, return *the **third distinct maximum** number in this array. If the third maximum does not exist, return the **maximum** number*.
+You are given an integer array `nums`.
+
+Return the **third distinct maximum** number in this array. If the third **maximum** does not exist, return the **maximum** number.
 
 **Example 1:**
 
@@ -68,9 +70,13 @@ The accepted solution is available below. Add a short explanation of the techniq
 
 ---
 
+---
+
 ## Algorithm
 
 Review the accepted solution and describe its main processing steps.
+
+---
 
 ---
 
@@ -86,6 +92,8 @@ Review the accepted solution and describe its main processing steps.
 
 - **Time Complexity:** Add after analysing the loops and operations used by the solution.
 - **Space Complexity:** Add after checking the extra data structures used by the solution.
+
+---
 
 ---
 
